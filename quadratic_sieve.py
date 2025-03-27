@@ -17,6 +17,8 @@ def choose_factor_base_bound(N) -> int:
 def build_factor_base(B) -> list:
     return primerange(2, B+1) # returns all primes from 2 to B
 
+
+# TODO: Actually implement sieve here
 def find_b_smooth_squares(N, B: int) -> tuple[list, list]:
     nums = []
     factorizations = []
@@ -58,30 +60,31 @@ def quadratic_sieve(N):
     # any row vector will work as a linear combo that yields 0 mod 2
     for row in null_space:
         linear_combo = row
-        # print(linear_combo)
         # each 1 in this row represents a congruence we should include
         exponents_squared = [0 for _ in factor_base]
         sqrt_number = 1
         for i, included in enumerate(linear_combo):
             if included == 1:
-                sqrt_number = (nums[i] * sqrt_number) % N
+                sqrt_number = (nums[i] * sqrt_number) % N   # we actually returned the sqrt of x from b_smooth method so this is fine
+                # add the exponents of the factorization to our list we will take the product of
                 for p, exponent in factorizations[i].items():
                     exponents_squared[dict_factor_base[p]] += exponent
                 nums.append(nums[i])
 
-        exponents = [e // 2 for e in exponents_squared]
+        exponents = [e // 2 for e in exponents_squared] # we want the square root of the product of the p^e's
+        # so we just divide all the exponents by 2 and take the product
         exp_product = 1
         for p, exponent in dict_factor_base.items():
             exp_product = (exp_product * pow(p, exponents[exponent], N)) % N
 
-        # print(exp_product, sqrt_number)
-
+        # works if x != +- y mod n, otherwise we keep going and try a different linear combo
         if exp_product != sqrt_number and exp_product != -sqrt_number % N:
+            # then a common factor is gcd(sqrt_number - exp_product, N)
             one_factor = math.gcd(sqrt_number - exp_product, N)
-            other_factor = N // one_factor
+            other_factor = N // one_factor      # and another is just dividing N by the first
             return one_factor, other_factor
     
-
+    # if we don't find a solution, return None
     return None
 
 if __name__ == '__main__':
