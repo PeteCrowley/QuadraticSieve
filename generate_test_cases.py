@@ -1,9 +1,9 @@
 from sympy import prime
 import random
 
-out_file = "large_testcases.txt"
-range_start = 10000
-range_end = 100000
+out_file = "huge_testcases.txt"
+range_start = 1000000
+range_end = 2000000
 
 tests = []
 for i in range(100):

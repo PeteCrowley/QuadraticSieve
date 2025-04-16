@@ -17,5 +17,5 @@ def test_program(test_file):
     print("All tests passed!")
 
 if __name__ == '__main__':
-    test_program("large_testcases.txt")
+    test_program("huge_testcases.txt")
     

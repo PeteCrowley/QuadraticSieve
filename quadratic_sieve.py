@@ -59,6 +59,10 @@ def build_smart_factor_base(N, B) -> list:
             factor_base.append(p)
     return factor_base
 
+#TODO: Improve this method a lot
+# Specificaly: 1) change sieve intervals to all be around sqrt(kN) for some k instead of just going up from sqrt(N)
+# 2) Expand the search to an interval sqrt(kn) - A to sqrt(kn) + A for some A instead of just above sqrt(N)
+# 3) Parallelize this search to make it much quicker
 def better_find_b_smooth_squares(N, B, factor_base, dict_factor_base) -> list:
     """Finds B-smooth squares mod N using the quadratic sieve method
 
