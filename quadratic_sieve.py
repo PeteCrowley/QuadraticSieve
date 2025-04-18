@@ -10,8 +10,12 @@ import os
 
 
 EXTRA_VECTORS = 10
-SIEVE_INTERVAL_SIZE = 1_000_000
-PRIMES_TO_SKIP = 10
+SIEVE_INTERVAL_SIZE = 100_000
+PRIMES_TO_SKIP = 5
+SIEVE_CUSHION = 20
+PARALLEL = True
+UPDATE_INTERVAL = 100
+
 
 
 def choose_factor_base_bound(N) -> int:
@@ -30,6 +34,21 @@ def is_quadratic_residue(N, p):
     if pow(N, (p - 1) // 2, p) == 1:
         return True
     return False
+
+
+def build_smart_factor_base(N, B) -> list:
+    """Builds the factor base of primes less than B that are quadratic residues mod N
+
+        :param N: The number to factor
+        :param B: The bound for the factor base
+        :returns factor_base: A list of primes that are quadratic residues mod N
+    """
+    factor_base = [-1]
+    for p in primerange(2, B+1):
+        if is_quadratic_residue(N, p):
+            factor_base.append(p)
+    return factor_base
+
 
 def b_smooth_factor(x: int, factor_base: list) -> dict | None:
     """Trial division to check if x is B-Smooth and if so to find factorization
@@ -55,56 +74,47 @@ def b_smooth_factor(x: int, factor_base: list) -> dict | None:
         return None
     return powers
 
-def build_smart_factor_base(N, B) -> list:
-    """Builds the factor base of primes less than B that are quadratic residues mod N
 
-        :param N: The number to factor
-        :param B: The bound for the factor base
-        :returns factor_base: A list of primes that are quadratic residues mod N
-    """
-    factor_base = [-1]
-    for p in primerange(2, B+1):
-        if is_quadratic_residue(N, p):
-            factor_base.append(p)
-    return factor_base
-
-
-def sieve_and_filter(N, B, factor_base, dict_factor_base, log_factor_base, iteration):
-    """The exact same functionality as the better_find_b_smooth_squares function, but parallelized"""
+def process_one_interval(N, B, factor_base, dict_factor_base, log_factor_base, iteration, sieve_interval_size):
+    """The exact same functionality as the better_find_b_smooth_squares function, but parallelized. 
+       Check the docstring for that function for more information"""
     def f(x):
         return x**2 - N
 
     sieve_interval_center = math.ceil(math.sqrt(N))
-    small_start = sieve_interval_center - (iteration+1) * SIEVE_INTERVAL_SIZE
-    large_start = sieve_interval_center + iteration * SIEVE_INTERVAL_SIZE
-    smaller_registers = np.zeros(SIEVE_INTERVAL_SIZE)     # checking below sqrt(N) will have [sieve_center + center_distance, sieve_center + center_distance + SIEVE_INTERVAL_SIZE)
-    larger_registers = np.zeros(SIEVE_INTERVAL_SIZE)     # checking above sqrt(N) will have [sieve_center - center_distance + SIEVE_INTERVAL_SIZE, sieve_center - center_distance + SIEVE_INTERVAL_SIZE)]
+    small_start = sieve_interval_center - (iteration+1) * sieve_interval_size
+    large_start = sieve_interval_center + iteration * sieve_interval_size
+    smaller_registers = np.zeros(sieve_interval_size)
+    larger_registers = np.zeros(sieve_interval_size)
 
     for p in factor_base[PRIMES_TO_SKIP:]:
         sols = sqrt_mod(N, p, all_roots=True)
         for sol in sols:
-            for i in range((sol-large_start) % p, SIEVE_INTERVAL_SIZE, p):
+            for i in range((sol-large_start) % p, sieve_interval_size, p):
                 larger_registers[i] += log_factor_base[dict_factor_base[p]]
-            for i in range((sol-small_start) % p, SIEVE_INTERVAL_SIZE, p):
+            for i in range((sol-small_start) % p, sieve_interval_size, p):
                 smaller_registers[i] += log_factor_base[dict_factor_base[p]]
 
     results = []
-    for x in range(SIEVE_INTERVAL_SIZE):
+    for i in range(0, sieve_interval_size):
         for start, regs in [(small_start, smaller_registers), (large_start, larger_registers)]:
-            if regs[x] >= math.log(x+start) - math.log(B):
-                factors = b_smooth_factor(f(x+start), factor_base)
+            x = i + start
+            if regs[i] >= math.log(abs(f(x))) - SIEVE_CUSHION:
+                factors = b_smooth_factor(f(x), factor_base)
                 if factors is not None:
-                    
-                    results.append((x+start, factors))
+                    results.append((x, factors))
     return results
    
-def parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base) -> list:
-    """Just a parallel version of the better_find_b_smooth_squares function"""
+def parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose) -> list:
+    """Just a parallel version of the better_find_b_smooth_squares function which 
+       processes each interval in parallel. Functionality is the same as better_find_b_smooth_squares.
+       Check the docstring for that function for more information"""
     log_factor_base  = [math.log(p) if p != -1 else 0 for p in factor_base]
     nums = []
     factorizations = []
+    sieve_interval_size = min(SIEVE_INTERVAL_SIZE, int(math.sqrt(N)) - 2)
 
-    max_iters = (int(math.sqrt(N)) // SIEVE_INTERVAL_SIZE) - 1
+    max_iters = (int(math.sqrt(N)) // sieve_interval_size) - 1
     vectors_needed = len(factor_base) + 1 + EXTRA_VECTORS
 
     start_number = os.cpu_count()   # let's just start with the number of iterations our computer can do in parallel
@@ -113,21 +123,25 @@ def parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base) -> list:
         futures = []
         # submit the first start_number iterations
         for i in range(0, start_number):
-            futures.append(executor.submit(sieve_and_filter, N, B, factor_base, dict_factor_base, log_factor_base, i))
+            futures.append(executor.submit(process_one_interval, N, B, factor_base, dict_factor_base, log_factor_base, i, sieve_interval_size))
         iteration = start_number
 
+
         while futures and len(nums) < vectors_needed:
-            for future in as_completed(futures):
+            for future in as_completed(futures):    # as we complete iterations
                 result = future.result()
+                # add the results from the interval to our list
                 for x, factors in result:
                     nums.append(x)
                     factorizations.append(factors)
+                    if verbose and len(nums) % UPDATE_INTERVAL == 0:
+                            print(f"Found {len(nums)} of {len(factor_base) + 1 + EXTRA_VECTORS} needed B-smooth numbers so far")
 
                 futures.remove(future)      # remove the iteration we just finished
 
                 # if we have more work to do, submit the next iteration
                 if iteration < max_iters and len(nums) < vectors_needed:
-                    futures.append(executor.submit(sieve_and_filter, N, B, factor_base, dict_factor_base, log_factor_base, iteration))
+                    futures.append(executor.submit(process_one_interval, N, B, factor_base, dict_factor_base, log_factor_base, iteration, sieve_interval_size))
                     iteration += 1
 
                 # if we have enough numbers, break
@@ -136,9 +150,8 @@ def parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base) -> list:
                 
     return nums, factorizations
 
-#TODO: Improve this method
-# Specificaly: 1) change sieve intervals to all be around sqrt(kN) for some k instead of just looking around sqrt(N)
-def better_find_b_smooth_squares(N, B, factor_base, dict_factor_base) -> list:
+
+def better_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose) -> list:
     """Finds B-smooth squares mod N using the quadratic sieve method
 
         :param N: The number to factor
@@ -148,54 +161,58 @@ def better_find_b_smooth_squares(N, B, factor_base, dict_factor_base) -> list:
         :returns nums: A list of numbers that are B-smooth squares mod N
         :returns factorizations: A list of dictionaries of the form {p: exponent} for each number in nums
     """
+    # the polynomial we will sieve with
     def f(x):
         return x**2 - N
     
-    log_factor_base  = [math.log(p) if p != -1 else 0 for p in factor_base]
-
+    log_factor_base  = [math.log(p) if p != -1 else 0 for p in factor_base] # take the log of each of the primes except -1
+    sieve_interval_size = min(SIEVE_INTERVAL_SIZE, int(math.sqrt(N)) - 2)   # don't want to try and sieve any negative numbers
     sieve_interval_center = math.ceil(math.sqrt(N))
     iteration = 0
 
-    nums = []
-    factorizations = []
+    nums = []               # the numbers we will return (note we return the numbers themselves, not their squares mod N)
+    factorizations = []     # the factorizations of the numbers squared mod N
 
     # we want enough numbers to guarantee a linear dependence
     while len(nums) < len(factor_base) + 1 + EXTRA_VECTORS:
-        small_start = sieve_interval_center - (iteration+1) * SIEVE_INTERVAL_SIZE
-        large_start = sieve_interval_center + iteration * SIEVE_INTERVAL_SIZE
+        # the true x value of the first x we will check in both the small and large intervals
+        small_start = sieve_interval_center - (iteration+1) * sieve_interval_size
+        large_start = sieve_interval_center + iteration * sieve_interval_size
 
-        smaller_registers = np.zeros(SIEVE_INTERVAL_SIZE)     # checking below sqrt(N) will have [sieve_center + center_distance, sieve_center + center_distance + SIEVE_INTERVAL_SIZE)
-        larger_registers = np.zeros(SIEVE_INTERVAL_SIZE)     # checking above sqrt(N) will have [sieve_center - center_distance + SIEVE_INTERVAL_SIZE, sieve_center - center_distance + SIEVE_INTERVAL_SIZE)]
+        smaller_registers = np.zeros(sieve_interval_size)     # for numbers below sqrt(N)
+        larger_registers = np.zeros(sieve_interval_size)      # for numbers above sqrt(N)
         
+        # for each prime in the factor base (we can skip the first few since their log is small), we will find the two solutions to x^2 = N mod p
         for p in factor_base[1+PRIMES_TO_SKIP:]:
             sols = sqrt_mod(N, p, all_roots=True)   # find the two solutions (if they exist)
             for sol in sols:
-
-                for i in range((sol-large_start) % p, SIEVE_INTERVAL_SIZE, p):   # all numbers congruent to sol mod p are also solutions
+                for i in range((sol-large_start) % p, sieve_interval_size, p):   # all numbers congruent to sol mod p are also solutions
                     larger_registers[i] += log_factor_base[dict_factor_base[p]]    # so we add the log of the prime to the register
 
-                for i in range((sol-small_start) % p, SIEVE_INTERVAL_SIZE, p):   # all numbers congruent to sol mod p are also solutions
-                    smaller_registers[i] += log_factor_base[dict_factor_base[p]]    # so we add the log of the prime to the register
+                for i in range((sol-small_start) % p, sieve_interval_size, p):   # same as above for the smaller registers
+                    smaller_registers[i] += log_factor_base[dict_factor_base[p]]    
         
-        # for numbers with small values now, we will check if they are B smooth
-        for x in range(0, SIEVE_INTERVAL_SIZE):
-            for start, regs in [(small_start, smaller_registers), (large_start, larger_registers)]:
-                if regs[x] >= math.log(x+start) - math.log(B):
-                    factors = b_smooth_factor(f(x+start), factor_base)
+        # for numbers x whose sum of logs of prime divisors is close to the number, we check if they are B-smooth
+        for i in range(0, sieve_interval_size):
+            for start, regs in [(small_start, smaller_registers), (large_start, larger_registers)]:     # check both the smaller and larger registers
+                x = i + start
+                if regs[i] >= math.log(abs(f(x))) - SIEVE_CUSHION:       # this formula is what we define as "close enough" in the textbook
+                    factors = b_smooth_factor(f(x), factor_base)      # try to factor by trial division
                     if factors is not None:
                         # if the number is B smooth, we will add it to our list
-                        nums.append(x+start)
+                        nums.append(x)
                         factorizations.append(factors)
-                        # print(len(nums), nums[-1], factorizations[-1])
-                        if len(nums) >= len(factor_base) + 1 + EXTRA_VECTORS:
+                        if verbose and len(nums) % UPDATE_INTERVAL == 0:
+                            print(f"Found {len(nums)} of {len(factor_base) + 1 + EXTRA_VECTORS} needed B-smooth numbers so far")
+
+                        if len(nums) >= len(factor_base) + 1 + EXTRA_VECTORS:   # we have found enough factors
                             break
 
-
+        # on the next iteration, we will search further away from sqrt(N)
         iteration += 1
-        if (iteration+1) * SIEVE_INTERVAL_SIZE > math.sqrt(N):
+        if (iteration+1) * sieve_interval_size > math.sqrt(N):  # we've exhausted [0, 2sqrt(N)]
             break
-        
-    return nums, factorizations
+    return nums, factorizations     # if we didn't find enough numbers, we will just return what we have and maybe get lucky
 
 
 def vectorize_factorizations(factorizations, dict_factor_base) -> np.array:
@@ -220,61 +237,72 @@ def quadratic_sieve(N, verbose=False):
         :param N: The number to factor
         :param verbose: If True, print debug information
         :returns factors: A tuple of the two factors if found, None if it can't find any"""
+    found_factors = False
     B = choose_factor_base_bound(N)
-    factor_base = list(build_smart_factor_base(N, B))
-    if verbose:
-        print(f"=== Chose factor base of {B} consisting of {len(factor_base)} primes===")
-    dict_factor_base = {p: i for i, p in enumerate(factor_base)}
-
-    if verbose:
-        print("=== Searching for B-smooth squares ===")
-    # nums, factorizations = better_find_b_smooth_squares(N, B, factor_base, dict_factor_base)
-    nums, factorizations = parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base)
-
-    if nums == []:
-        return None
+    while not found_factors and B < math.sqrt(N):
     
-    vectorized_factorizations = vectorize_factorizations(factorizations, dict_factor_base)
-    # Find nontrival solution of Ax = 0 mod 2
-    if verbose:
-        print("=== Finding linear dependence===")
-    A = GF2(np.matrix(vectorized_factorizations).T)
-    # find the null space of A
-    null_space = A.null_space()
-    
-    if verbose:
-        print("=== Trying to factor n ===")
-    # any row vector will work as a linear combo that yields 0 mod 2
-    for row in null_space:
-        linear_combo = row
-        # each 1 in this row represents a congruence we should include
-        exponents_squared = [0 for _ in factor_base]
-        sqrt_number = 1
-        for i, included in enumerate(linear_combo):
-            if included == 1:
-                sqrt_number = (nums[i] * sqrt_number) % N   # we actually returned the sqrt of x from b_smooth method so this is fine
-                # add the exponents of the factorization to our list we will take the product of
-                for p, exponent in factorizations[i].items():
-                    exponents_squared[dict_factor_base[p]] += exponent
-                nums.append(nums[i])
+        factor_base = list(build_smart_factor_base(N, B))
+        if verbose:
+            print(f"=== Chose factor base of {B} consisting of {len(factor_base)} primes===")
+        dict_factor_base = {p: i for i, p in enumerate(factor_base)}
 
-        exponents = [e // 2 for e in exponents_squared] # we want the square root of the product of the p^e's
-        # so we just divide all the exponents by 2 and take the product
-        exp_product = 1
-        for p, exponent in dict_factor_base.items():
-            exp_product = (exp_product * pow(p, exponents[exponent], N)) % N
+        if verbose:
+            print("=== Searching for B-smooth squares ===")
+        
+        if PARALLEL:
+            nums, factorizations = parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose)
+        else:
+            nums, factorizations = better_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose)
 
-        # works if x != +- y mod n, otherwise we keep going and try a different linear combo
-        if exp_product != sqrt_number and exp_product != -sqrt_number % N:
-            # then a common factor is gcd(sqrt_number - exp_product, N)
-            one_factor = math.gcd(sqrt_number - exp_product, N)
-            other_factor = N // one_factor      # and another is just dividing N by the first
-            if verbose:
-                print("=== Found factors ===")
-                print(f"{N} = {one_factor} * {other_factor}")
-            return one_factor, other_factor
-    
-    # if we don't find a solution, return None
+        if nums == []:
+            B *= 2
+            continue
+        
+        vectorized_factorizations = vectorize_factorizations(factorizations, dict_factor_base)
+        # Find nontrival solution of Ax = 0 mod 2
+        if verbose:
+            print("=== Finding linear dependence===")
+        A = GF2(np.matrix(vectorized_factorizations).T)
+        # find the null space of A
+        null_space = A.null_space()
+        
+        if verbose:
+            print("=== Trying to factor n ===")
+        # any row vector will work as a linear combo that yields 0 mod 2
+        for row in null_space:
+            linear_combo = row
+            # each 1 in this row represents a congruence we should include
+            exponents_squared = [0 for _ in factor_base]
+            sqrt_number = 1
+            for i, included in enumerate(linear_combo):
+                if included == 1:
+                    sqrt_number = (nums[i] * sqrt_number) % N   # we actually returned the sqrt of x from b_smooth method so this is fine
+                    # add the exponents of the factorization to our list we will take the product of
+                    for p, exponent in factorizations[i].items():
+                        exponents_squared[dict_factor_base[p]] += exponent
+                    nums.append(nums[i])
+
+            exponents = [e // 2 for e in exponents_squared] # we want the square root of the product of the p^e's
+            # so we just divide all the exponents by 2 and take the product
+            exp_product = 1
+            for p, exponent in dict_factor_base.items():
+                exp_product = (exp_product * pow(p, exponents[exponent], N)) % N
+
+            # works if x != +- y mod n, otherwise we keep going and try a different linear combo
+            if exp_product != sqrt_number and exp_product != -sqrt_number % N:
+                # then a common factor is gcd(sqrt_number - exp_product, N)
+                one_factor = math.gcd(sqrt_number - exp_product, N)
+                other_factor = N // one_factor      # and another is just dividing N by the first
+                if verbose:
+                    print("=== Found factors ===")
+                    print(f"{N} = {one_factor} * {other_factor}")
+                return one_factor, other_factor
+        
+        # if we didn't find a solution, let's double B and try again
+        if verbose:
+            print("=== No factors found, trying again with larger B ===")
+        B *=2
+
     return None
 
 if __name__ == '__main__':
