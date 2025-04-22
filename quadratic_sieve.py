@@ -15,16 +15,17 @@ PRIMES_TO_SKIP = 5
 SIEVE_CUSHION = 20
 PARALLEL = True
 UPDATE_INTERVAL = 100
+BIGGER_B_FACTOR = 4/3
 
 
-
-def choose_factor_base_bound(N) -> int:
+def choose_factor_base_bound(N: int) -> int:
     """Chooses the bound for the factor base using the formula from the book"""
     L = math.exp(math.sqrt(math.log(N) * math.log(math.log(N))))
     B = L ** (1/2)
+    B *= BIGGER_B_FACTOR
     return math.ceil(B)
 
-def is_quadratic_residue(N, p):
+def is_quadratic_residue(N: int, p: int):
     """Returns True if N is a square mod p, False otherwise.
        
         :param N: The number to check
@@ -36,7 +37,7 @@ def is_quadratic_residue(N, p):
     return False
 
 
-def build_smart_factor_base(N, B) -> list:
+def build_smart_factor_base(N: int, B: int) -> list:
     """Builds the factor base of primes less than B that are quadratic residues mod N
 
         :param N: The number to factor
@@ -48,7 +49,6 @@ def build_smart_factor_base(N, B) -> list:
         if is_quadratic_residue(N, p):
             factor_base.append(p)
     return factor_base
-
 
 def b_smooth_factor(x: int, factor_base: list) -> dict | None:
     """Trial division to check if x is B-Smooth and if so to find factorization
@@ -75,11 +75,9 @@ def b_smooth_factor(x: int, factor_base: list) -> dict | None:
     return powers
 
 
-def process_one_interval(N, B, factor_base, dict_factor_base, log_factor_base, iteration, sieve_interval_size):
+def process_one_interval(N: int, factor_base: list[int], dict_factor_base: dict[int, int], log_factor_base: list[float], iteration: int, sieve_interval_size: int):
     """The exact same functionality as the better_find_b_smooth_squares function, but parallelized. 
        Check the docstring for that function for more information"""
-    def f(x):
-        return x**2 - N
 
     sieve_interval_center = math.ceil(math.sqrt(N))
     small_start = sieve_interval_center - (iteration+1) * sieve_interval_size
@@ -87,7 +85,7 @@ def process_one_interval(N, B, factor_base, dict_factor_base, log_factor_base, i
     smaller_registers = np.zeros(sieve_interval_size)
     larger_registers = np.zeros(sieve_interval_size)
 
-    for p in factor_base[PRIMES_TO_SKIP:]:
+    for p in factor_base[1+PRIMES_TO_SKIP:]:
         sols = sqrt_mod(N, p, all_roots=True)
         for sol in sols:
             for i in range((sol-large_start) % p, sieve_interval_size, p):
@@ -99,13 +97,14 @@ def process_one_interval(N, B, factor_base, dict_factor_base, log_factor_base, i
     for i in range(0, sieve_interval_size):
         for start, regs in [(small_start, smaller_registers), (large_start, larger_registers)]:
             x = i + start
-            if regs[i] >= math.log(abs(f(x))) - SIEVE_CUSHION:
-                factors = b_smooth_factor(f(x), factor_base)
+            fx = x**2 - N
+            if regs[i] >= math.log(abs(fx)) - SIEVE_CUSHION:
+                factors = b_smooth_factor(fx, factor_base)
                 if factors is not None:
                     results.append((x, factors))
     return results
    
-def parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose) -> list:
+def parallel_find_b_smooth_squares(N: int, factor_base: list[int], dict_factor_base: dict[int, int], verbose: bool) -> list:
     """Just a parallel version of the better_find_b_smooth_squares function which 
        processes each interval in parallel. Functionality is the same as better_find_b_smooth_squares.
        Check the docstring for that function for more information"""
@@ -123,7 +122,7 @@ def parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose)
         futures = []
         # submit the first start_number iterations
         for i in range(0, start_number):
-            futures.append(executor.submit(process_one_interval, N, B, factor_base, dict_factor_base, log_factor_base, i, sieve_interval_size))
+            futures.append(executor.submit(process_one_interval, N, factor_base, dict_factor_base, log_factor_base, i, sieve_interval_size))
         iteration = start_number
 
 
@@ -141,7 +140,7 @@ def parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose)
 
                 # if we have more work to do, submit the next iteration
                 if iteration < max_iters and len(nums) < vectors_needed:
-                    futures.append(executor.submit(process_one_interval, N, B, factor_base, dict_factor_base, log_factor_base, iteration, sieve_interval_size))
+                    futures.append(executor.submit(process_one_interval, N, factor_base, dict_factor_base, log_factor_base, iteration, sieve_interval_size))
                     iteration += 1
 
                 # if we have enough numbers, break
@@ -151,7 +150,7 @@ def parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose)
     return nums, factorizations
 
 
-def better_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose) -> list:
+def better_find_b_smooth_squares(N: int, factor_base: list[int], dict_factor_base: dict[int, int], verbose: bool) -> list:
     """Finds B-smooth squares mod N using the quadratic sieve method
 
         :param N: The number to factor
@@ -161,20 +160,19 @@ def better_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose) -
         :returns nums: A list of numbers that are B-smooth squares mod N
         :returns factorizations: A list of dictionaries of the form {p: exponent} for each number in nums
     """
-    # the polynomial we will sieve with
-    def f(x):
-        return x**2 - N
     
     log_factor_base  = [math.log(p) if p != -1 else 0 for p in factor_base] # take the log of each of the primes except -1
     sieve_interval_size = min(SIEVE_INTERVAL_SIZE, int(math.sqrt(N)) - 2)   # don't want to try and sieve any negative numbers
     sieve_interval_center = math.ceil(math.sqrt(N))
     iteration = 0
+    polynomial_solutions = [sqrt_mod(N, p, all_roots=True) for p in factor_base] # the solutions to the polynomial mod p
 
     nums = []               # the numbers we will return (note we return the numbers themselves, not their squares mod N)
     factorizations = []     # the factorizations of the numbers squared mod N
 
     # we want enough numbers to guarantee a linear dependence
-    while len(nums) < len(factor_base) + 1 + EXTRA_VECTORS:
+    vectors_needed = len(factor_base) + 1 + EXTRA_VECTORS
+    while len(nums) < vectors_needed:
         # the true x value of the first x we will check in both the small and large intervals
         small_start = sieve_interval_center - (iteration+1) * sieve_interval_size
         large_start = sieve_interval_center + iteration * sieve_interval_size
@@ -183,8 +181,10 @@ def better_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose) -
         larger_registers = np.zeros(sieve_interval_size)      # for numbers above sqrt(N)
         
         # for each prime in the factor base (we can skip the first few since their log is small), we will find the two solutions to x^2 = N mod p
-        for p in factor_base[1+PRIMES_TO_SKIP:]:
-            sols = sqrt_mod(N, p, all_roots=True)   # find the two solutions (if they exist)
+        for i, p in enumerate(factor_base):
+            if i < PRIMES_TO_SKIP + 1:   # skip the first few primes
+                continue
+            sols = polynomial_solutions[dict_factor_base[p]]   # the solutions to the polynomial mod p
             for sol in sols:
                 for i in range((sol-large_start) % p, sieve_interval_size, p):   # all numbers congruent to sol mod p are also solutions
                     larger_registers[i] += log_factor_base[dict_factor_base[p]]    # so we add the log of the prime to the register
@@ -196,16 +196,17 @@ def better_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose) -
         for i in range(0, sieve_interval_size):
             for start, regs in [(small_start, smaller_registers), (large_start, larger_registers)]:     # check both the smaller and larger registers
                 x = i + start
-                if regs[i] >= math.log(abs(f(x))) - SIEVE_CUSHION:       # this formula is what we define as "close enough" in the textbook
-                    factors = b_smooth_factor(f(x), factor_base)      # try to factor by trial division
+                fx = x**2 - N   # the polynomial value at x
+                if regs[i] >= math.log(abs(fx)) - SIEVE_CUSHION:       # this formula is what we define as "close enough" in the textbook
+                    factors = b_smooth_factor(fx, factor_base)      # try to factor by trial division
                     if factors is not None:
                         # if the number is B smooth, we will add it to our list
                         nums.append(x)
                         factorizations.append(factors)
                         if verbose and len(nums) % UPDATE_INTERVAL == 0:
-                            print(f"Found {len(nums)} of {len(factor_base) + 1 + EXTRA_VECTORS} needed B-smooth numbers so far")
+                            print(f"Found {len(nums)} of {vectors_needed} needed B-smooth numbers so far")
 
-                        if len(nums) >= len(factor_base) + 1 + EXTRA_VECTORS:   # we have found enough factors
+                        if len(nums) >= vectors_needed:   # we have found enough factors
                             break
 
         # on the next iteration, we will search further away from sqrt(N)
@@ -215,7 +216,7 @@ def better_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose) -
     return nums, factorizations     # if we didn't find enough numbers, we will just return what we have and maybe get lucky
 
 
-def vectorize_factorizations(factorizations, dict_factor_base) -> np.array:
+def vectorize_factorizations(factorizations: dict[int, int], dict_factor_base: dict[int, int]) -> np.array:
     """Vectorizes the factorizations into a matrix mod 2
 
         :param factorizations: A list of dictionaries of the form {p: exponent} for each number in nums
@@ -231,7 +232,7 @@ def vectorize_factorizations(factorizations, dict_factor_base) -> np.array:
             matrix[i][dict_factor_base[p]] = exponent % 2 # set it to the exponent mod 2
     return matrix
 
-def quadratic_sieve(N, verbose=False):
+def quadratic_sieve(N: int, verbose: bool=False):
     """Quadratic Sieve implementation to factor N
 
         :param N: The number to factor
@@ -250,9 +251,9 @@ def quadratic_sieve(N, verbose=False):
             print("=== Searching for B-smooth squares ===")
         
         if PARALLEL:
-            nums, factorizations = parallel_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose)
+            nums, factorizations = parallel_find_b_smooth_squares(N, factor_base, dict_factor_base, verbose)
         else:
-            nums, factorizations = better_find_b_smooth_squares(N, B, factor_base, dict_factor_base, verbose)
+            nums, factorizations = better_find_b_smooth_squares(N, factor_base, dict_factor_base, verbose)
 
         if nums == []:
             B *= 2
