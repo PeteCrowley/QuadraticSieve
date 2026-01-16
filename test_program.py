@@ -19,7 +19,7 @@ def test_program(test_file):
 
 if __name__ == '__main__':
     time_start = time.time()
-    test_program("huge_testcases.txt")
+    test_program("testcases/large_testcases.txt")
     time_end = time.time()
     print(f"Execution time: {time_end - time_start:.2f} seconds")
     

@@ -1,0 +1,4 @@
+# Quadratic Sieve Implementation
+This is an implementation of the quadratic sieve algorithm for factoring prime numbers. It can effeciently factor products of two large prime numbers that are up to a little over 40 digits long. For example, did you know the prime 63183293828508069049254993706390926574212179729 = 2265108875715916116335234036530663 * 27894153126983? After installing requirements (via `pip3 install -r requirements.txt`), one can run the program with `python3 quadratic_sieve.py <N>` where `N=pq` where `p` and `q` are both primes. This is especially useful for cracking encryption algorithms like RSA.
+
+If you'd like to read more about the implementation or the math behind it, you can check out `Quadratic_Sieve_Project.pdf` for some details.
